@@ -7,3 +7,4 @@ chromadb
 pdfplumber 
 fpdf2
 google-generativeai
+langchain_text_splitters
