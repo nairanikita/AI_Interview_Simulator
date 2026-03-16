@@ -88,7 +88,7 @@
 #     print("Setting up interview...")
 #     print("=" * 50)
 #     llm=ChatGoogleGenerativeAI(
-#         model="gemini-2.5-flash",
+#         model="gemini-2.0-flash",
 #         temprature=0.7
 #     )
 #     raw_text=extract_text_from_pdf(pdf_path)
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     print("=" * 50)
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.0-flash",
         temperature=0.7
     )
     raw_text = extract_text_from_pdf(PDF_PATH)

@@ -6,6 +6,7 @@ import tempfile
 from document_processor import extract_text_from_pdf,chunk_text,extract_skills
 from vector_store import build_vector_store
 from interviewer_agent import InterviewerAgent
+from scorer import generate_score_report
 
 load_dotenv()
 # llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash",temperature=0.7)
@@ -73,7 +74,7 @@ if start_button:
             ) as tmp:
                 tmp.write(resume_file.read())
                 tmp_path=tmp.name
-            llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash",temperature=0.7)
+            llm=ChatGoogleGenerativeAI(model="gemini-2.0-flash",temperature=0.7)
             raw_text=extract_text_from_pdf(tmp_path)
             chunks=chunk_text(raw_text)
             resume_summary=extract_skills(raw_text,llm)
@@ -121,40 +122,89 @@ if not st.session_state.interview_active:
         st.markdown("**Step 3**\nClick Start Interview")
 
 else:
-    # Display all messages in the chat
+    
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.write(message["content"])
 
-    # Check if interview is complete
+    
     if st.session_state.interview_complete:
         st.success(
             "Interview complete! Go to the sidebar and click "
-            "Reset to start a new interview."
         )
+        st.divider()
+        with st.spinner("Generating your score report..."):
+            chat_history=st.session_state.agent.get_history()
+            llm=ChatGoogleGenerativeAI(model="gemini-2.0-flash",
+                                       temperature=0.1)
+            report=generate_score_report(chat_history,role,llm)
+            overall = report["overall_score"]
+            if overall >= 8:
+                st.success(f"Overall Score: {overall}/10")
+            elif overall >= 6:
+                st.warning(f"Overall Score: {overall}/10")
+            else:
+                st.error(f"Overall Score: {overall}/10")
+
+            # hiring recommendation
+            rec = report["hiring_recommendation"]
+            st.markdown(f"**Hiring Recommendation:** {rec}")
+            st.caption(report["recommendation_reason"])
+            st.divider()
+
+            # dimension scores
+            st.subheader("Scores by dimension")
+            dimensions = [
+                ("Technical Knowledge", report["technical"]),
+                ("Communication",       report["communication"]),
+                ("Problem Solving",     report["problem_solving"]),
+                ("Experience Relevance",report["experience"]),
+                ("Confidence",          report["confidence"]),
+            ]
+
+            for label, data in dimensions:
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    st.metric(label, f"{data['score']}/10")
+                with col2:
+                    st.caption(data["feedback"])
+
+            st.divider()
+
+            # strengths and improvements
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Strengths")
+                for s in report["strengths"]:
+                    st.markdown(f"- {s}")
+            with col2:
+                st.subheader("Areas to improve")
+                for a in report["areas_to_improve"]:
+                    st.markdown(f"- {a}")
+
 
     else:
-        # Chat input — where candidate types their answer
+        
         user_input = st.chat_input("Type your answer here...")
 
         if user_input:
-            # Add candidate message to display
+            
             st.session_state.messages.append({
                 "role": "user",
                 "content": user_input
             })
 
-            # Get Alex's response
+            
             with st.spinner("Alex is thinking..."):
                 response = st.session_state.agent.get_response(user_input)
 
-            # Add Alex's response to display
+           
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": response
             })
 
-            # Check if interview is over
+            
             if "concludes our interview" in response.lower():
                 st.session_state.interview_complete = True
 
