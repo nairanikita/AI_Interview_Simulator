@@ -54,7 +54,7 @@ if __name__=="__main__":
     print("\n" + "=" * 50)
     print("STEP 3: Extracting skills with Gemini")
     print("=" * 50)
-    llm=ChatGoogleGenerativeAI(model="gemini-2.5-flash",temperature=0.7)
+    llm=ChatGoogleGenerativeAI(model="gemini-2.0-flash",temperature=0.7)
     skills_summary=extract_skills(raw_text,llm)
     print(f"Extracted Skills Summary:\n{skills_summary}")
 
