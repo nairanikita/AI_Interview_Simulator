@@ -136,7 +136,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 SYSTEM_PROMPT = """You are Alex, a senior technical interviewer at a top tech company.
-You are interviewing a candidate for the role of {role}.
+You are interviewing a candidate named {candidate_name} for the role of {role}.
 
 CANDIDATE PROFILE:
 {resume_summary}
@@ -164,11 +164,12 @@ YOUR RULES — follow these strictly:
 class InterviewerAgent:
     
 
-    def __init__(self, llm, vectorstore, role: str,
+    def __init__(self, llm, vectorstore,candidate_name:str,role: str,
                  resume_summary: str, job_description: str):
 
         self.llm = llm
         self.vectorstore = vectorstore
+        self.candidate_name = candidate_name
         self.role = role
         self.resume_summary = resume_summary
         self.job_description = job_description
@@ -186,6 +187,7 @@ class InterviewerAgent:
     def _build_system_message(self, context: str) -> str:
         
         return SYSTEM_PROMPT.format(
+            candidate_name=self.candidate_name,
             role=self.role,
             resume_summary=self.resume_summary,
             job_description=self.job_description,
