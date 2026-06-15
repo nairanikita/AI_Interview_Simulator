@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check imports are valid
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          python -c "import streamlit"
+          python -c "import langchain"
+          python -c "import chromadb"
+          python -c "import pdfplumber"
+          python -c "from langchain_google_genai import ChatGoogleGenerativeAI"
+          python -c "from langchain_community.vectorstores import Chroma"
+          python -c "from document_processor import extract_text_from_pdf, chunk_text, extract_skills"
+          python -c "from vector_store import build_vector_store"
+          python -c "from scorer import generate_score_report"
+          python -c "from interviewer_agent import InterviewerAgent"
