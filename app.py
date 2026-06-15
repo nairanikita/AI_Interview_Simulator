@@ -27,6 +27,8 @@ if "interview_active"  not in st.session_state:
 
 if "interview_complete"  not in st.session_state:
     st.session_state.interview_complete=False
+if "score_report" not in st.session_state:
+    st.session_state.score_report=None
 
 with st.sidebar:
     st.title("Interview Setup")
@@ -58,6 +60,7 @@ with st.sidebar:
             st.session_state.messages=[]
             st.session_state.interview_active=False
             st.session_state.interview_complete=False
+            st.session_state.score_report=None
             st.rerun()
 if start_button:
     if not resume_file:
@@ -129,15 +132,15 @@ else:
 
     
     if st.session_state.interview_complete:
-        st.success(
-            "Interview complete! Go to the sidebar and click "
-        )
+        st.success("Interview complete! Your score report is below.")
         st.divider()
-        with st.spinner("Generating your score report..."):
-            chat_history=st.session_state.agent.get_history()
-            llm=ChatGoogleGenerativeAI(model="gemini-2.0-flash",
-                                       temperature=0.1)
-            report=generate_score_report(chat_history,role,llm)
+        if st.session_state.score_report is None:
+            with st.spinner("Generating your score report..."):
+                chat_history=st.session_state.agent.get_history()
+                llm=ChatGoogleGenerativeAI(model="gemini-2.0-flash",
+                                           temperature=0.1)
+                st.session_state.score_report=generate_score_report(chat_history,role,llm)
+        report=st.session_state.score_report
             overall = report["overall_score"]
             if overall >= 8:
                 st.success(f"Overall Score: {overall}/10")
