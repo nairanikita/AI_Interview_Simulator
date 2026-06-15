@@ -20,8 +20,6 @@ def build_vector_store(chunks:list,source:str="resume")->Chroma:
     vectorestore=Chroma.from_documents(
         documents=docs,
         embedding=embeddings,
-        persist_directory="./chroma_db"
-
     )
     return vectorestore
 
