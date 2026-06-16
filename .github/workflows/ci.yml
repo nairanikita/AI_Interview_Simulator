@@ -37,4 +37,5 @@ jobs:
           python -c "from vector_store import build_vector_store"
           python -c "from scorer import generate_score_report"
           python -c "from interviewer_agent import InterviewerAgent"
-          python -c "from voice_pipeline import transcribe_audio, text_to_speech"
+          python -c "from voice_pipeline import text_to_speech"
+          python -c "from gtts import gTTS"
