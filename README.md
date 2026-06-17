@@ -110,6 +110,28 @@ RESPONDING → (5 s silence)       →  PROCESSING  → SPEAKING
 
 ## Setup
 
+### Option A — Docker (recommended for sharing)
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+```bash
+git clone https://github.com/nairanikita/AI_Interview_Simulator.git
+cd AI_Interview_Simulator
+
+# Pass your OpenAI key and start
+OPENAI_API_KEY=sk-... docker compose up --build
+```
+
+Open [http://localhost:8501](http://localhost:8501) in Chrome or Edge.
+
+To stop: `docker compose down`
+
+> **Note:** Voice mode works — the browser's microphone and speaker are on your machine, not inside the container. Both ports (8501 UI and 3002 WebSocket) are forwarded automatically.
+
+---
+
+### Option B — Local Python
+
 ### Prerequisites
 
 - Python 3.11+
