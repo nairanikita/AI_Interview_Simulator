@@ -4,279 +4,327 @@
     <meta charset="UTF-8">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: transparent;
-            padding: 12px 16px;
+            background: transparent; padding: 10px 14px;
         }
-
-        .row {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .dot {
-            width: 11px;
-            height: 11px;
-            border-radius: 50%;
-            flex-shrink: 0;
-            background: #ccc;
-            transition: background 0.3s;
-        }
+        .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; background: #d1d5db; }
         .dot.listening  { background: #22c55e; animation: pulse 1.4s ease-in-out infinite; }
         .dot.speaking   { background: #3b82f6; animation: pulse 1.4s ease-in-out infinite; }
         .dot.processing { background: #f59e0b; }
-        .dot.paused     { background: #a855f7; }
+        .dot.waiting    { background: #f59e0b; animation: pulse 1.4s ease-in-out infinite; }
         .dot.error      { background: #ef4444; }
+        @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.35;transform:scale(0.8)} }
+        #status-text { font-size: 13px; font-weight: 600; color: #374151; }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1;   transform: scale(1);    }
-            50%       { opacity: 0.4; transform: scale(0.85); }
-        }
+        .info-box { border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; display: none; }
+        .info-box .label { font-size: 10px; font-weight: 700; text-transform: uppercase;
+                           letter-spacing: 0.05em; margin-bottom: 3px; }
+        .info-box .body  { font-size: 13px; line-height: 1.4; min-height: 18px; }
 
-        #status-text {
-            font-size: 13px;
-            font-weight: 500;
-            color: #374151;
-        }
+        #alex-box { background: #eff6ff; border: 1px solid #93c5fd; }
+        #alex-box .label { color: #1d4ed8; }
+        #alex-box .body  { color: #1e3a8a; }
 
-        #interim {
-            margin-top: 6px;
-            font-size: 12px;
-            color: #9ca3af;
-            font-style: italic;
-            min-height: 18px;
-            padding-left: 21px;
-        }
+        #live-box { background: #f0fdf4; border: 1px solid #86efac; }
+        #live-box .label { color: #16a34a; }
+        #live-box .body  { color: #166534; }
 
-        #not-supported {
-            font-size: 13px;
-            color: #ef4444;
-            display: none;
-        }
+        /* countdown bar — only shown while waiting for first speech */
+        #timer-wrap { display: none; margin-bottom: 6px; }
+        #timer-bar-bg { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
+        #timer-bar { height: 100%; border-radius: 3px; background: #22c55e;
+                     transition: width 1s linear, background 0.4s; }
+        #timer-label { font-size: 11px; color: #6b7280; margin-top: 2px; text-align: right; }
+
+        #error-msg { font-size: 12px; color: #ef4444; margin-top: 4px; display: none; }
     </style>
 </head>
 <body>
-    <div class="row">
-        <div class="dot listening" id="dot"></div>
-        <span id="status-text">Listening…</span>
-    </div>
-    <div id="interim"></div>
-    <div id="not-supported"></div>
+
+<div class="status-row">
+    <div class="dot waiting" id="dot"></div>
+    <span id="status-text">Connecting…</span>
+</div>
+
+<div id="alex-box" class="info-box">
+    <div class="label">Alex is saying…</div>
+    <div class="body" id="alex-text"></div>
+</div>
+
+<div id="timer-wrap">
+    <div id="timer-bar-bg"><div id="timer-bar" style="width:100%"></div></div>
+    <div id="timer-label">10s</div>
+</div>
+
+<div id="live-box" class="info-box">
+    <div class="label">Hearing you say…</div>
+    <div class="body" id="live-text"></div>
+</div>
+
+<div id="error-msg"></div>
 
 <script>
-    // ── constants ─────────────────────────────────────────────────────────────
-    const SILENCE_MS        = 15000;   // 15s of total silence → move on
-    const SPEECH_END_MS     = 1500;    // 1.5s quiet after speech → process it
-    const PAUSE_EXTENDED_MS = 45000;   // "give me a moment" → extend to 45s
+// ── config ────────────────────────────────────────────────────────────────────
+var WS_URL          = "ws://127.0.0.1:3002";
+var NO_SPEECH_SEC   = 10;    // seconds with NO speech before repeating/skipping
+var SPEECH_END_MS   = 5000;  // ms of silence AFTER last word before submitting (user can pause 5s mid-response)
 
-    const REPEAT_PHRASES = [
-        "repeat", "say that again", "can you repeat",
-        "pardon", "come again", "what did you say", "say it again"
-    ];
-    const PAUSE_PHRASES = [
-        "give me a moment", "let me think", "one moment",
-        "hold on", "give me a second", "one second", "just a moment"
-    ];
+// ── state machine ─────────────────────────────────────────────────────────────
+// WAITING    → listening but no speech detected yet → 10 s countdown runs
+// RESPONDING → user started speaking → countdown gone, only speech-end timer
+// PROCESSING → transcript sent, waiting for Alex's reply
+// SPEAKING   → Alex's TTS is playing
+var MODE = "SPEAKING"; // start muted until first TTS
 
-    // ── state ─────────────────────────────────────────────────────────────────
-    let recognition       = null;
-    let isListening       = false;
-    let isMuted           = false;
-    let silenceTimer      = null;
-    let speechEndTimer    = null;
-    let currentSilenceMs  = SILENCE_MS;
-    let accumulated       = "";
-    let lastAudioB64      = "";
+// ── vars ──────────────────────────────────────────────────────────────────────
+var ws            = null;
+var recognition   = null;
+var currentAudio  = null;   // track active Audio element so we can stop it
+var accumulated   = "";
+var speechEndTmr  = null;
+var countdownIval = null;
+var countdownSec  = 0;
+var repeatCount   = 0;
+var lastAudioId   = 0;
 
-    // ── DOM refs ──────────────────────────────────────────────────────────────
-    const dot         = document.getElementById("dot");
-    const statusText  = document.getElementById("status-text");
-    const interimEl   = document.getElementById("interim");
-    const notSupEl    = document.getElementById("not-supported");
+// ── DOM ───────────────────────────────────────────────────────────────────────
+var dot       = document.getElementById("dot");
+var statusEl  = document.getElementById("status-text");
+var alexBox   = document.getElementById("alex-box");
+var alexText  = document.getElementById("alex-text");
+var timerWrap = document.getElementById("timer-wrap");
+var timerBar  = document.getElementById("timer-bar");
+var timerLbl  = document.getElementById("timer-label");
+var liveBox   = document.getElementById("live-box");
+var liveText  = document.getElementById("live-text");
+var errorEl   = document.getElementById("error-msg");
 
-    // ── Streamlit protocol ────────────────────────────────────────────────────
-    function send(value) {
-        window.parent.postMessage({
-            type: "streamlit:setComponentValue",
-            apiVersion: 1,
-            value: value,
-        }, "*");
-    }
+// ── helpers ───────────────────────────────────────────────────────────────────
+function setStatus(cls, text) { dot.className = "dot " + cls; statusEl.textContent = text; }
+function showAlex(t) { alexBox.style.display = t ? "block" : "none"; alexText.textContent = t || ""; }
+function showLive(t) { liveBox.style.display = t ? "block" : "none"; liveText.textContent = t || ""; }
 
-    window.addEventListener("message", function (ev) {
-        if (ev.data.type === "streamlit:render") {
-            onProps(ev.data.args || {});
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connectWs() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen  = function() { errorEl.style.display = "none"; };
+    ws.onmessage = function(ev) {
+        var data = JSON.parse(ev.data);
+        if (data.type === "audio" && data.audio_id !== lastAudioId && data.b64) {
+            lastAudioId = data.audio_id;
+            playAudio(data.b64, data.text || "");
         }
-    });
+    };
+    ws.onerror = function() {
+        errorEl.style.display = "block";
+        errorEl.textContent = "Voice server unreachable — check Streamlit terminal.";
+    };
+    ws.onclose = function() {
+        // Server went away — stop audio and mic immediately
+        stopEverything();
+        setStatus("waiting", "Disconnected — reconnecting…");
+        setTimeout(connectWs, 1000);
+    };
+}
 
-    window.parent.postMessage({ type: "streamlit:componentReady", apiVersion: 1 }, "*");
-    window.parent.postMessage({ type: "streamlit:setFrameHeight", height: 70  }, "*");
+function sendEvent(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+}
 
-    // ── prop handler ──────────────────────────────────────────────────────────
-    function onProps(p) {
-        // new audio to play → mute mic, play, then resume
-        if (p.audio_b64 && p.audio_b64 !== lastAudioB64) {
-            lastAudioB64 = p.audio_b64;
-            playAudio(p.audio_b64);
-        }
-    }
+// ── countdown (WAITING phase only) ───────────────────────────────────────────
+function startWaitingCountdown() {
+    stopCountdown();
+    countdownSec = NO_SPEECH_SEC;
+    timerWrap.style.display = "block";
+    updateTimer(NO_SPEECH_SEC, NO_SPEECH_SEC);
+    countdownIval = setInterval(function() {
+        countdownSec--;
+        updateTimer(countdownSec, NO_SPEECH_SEC);
+        if (countdownSec <= 0) { stopCountdown(); onNoSpeechTimeout(); }
+    }, 1000);
+}
 
-    // ── audio playback ────────────────────────────────────────────────────────
-    function playAudio(b64) {
-        muteRecognition();
-        setStatus("speaking", "Alex is speaking…");
+function stopCountdown() {
+    clearInterval(countdownIval); countdownIval = null;
+    timerWrap.style.display = "none";
+}
 
-        const audio = new Audio("data:audio/mp3;base64," + b64);
-        audio.play().catch(function (e) {
-            // autoplay blocked — resume mic anyway
-            console.warn("audio play blocked:", e);
-            resumeRecognition();
-            send({ type: "speaking_done" });
-        });
+function updateTimer(rem, tot) {
+    var pct = Math.max(0, rem / tot) * 100;
+    timerBar.style.width      = pct + "%";
+    timerBar.style.background = pct > 50 ? "#22c55e" : pct > 20 ? "#f59e0b" : "#ef4444";
+    timerLbl.textContent      = rem + "s";
+}
 
-        audio.onended = function () {
-            // small gap so the mic doesn't catch the tail of TTS
-            setTimeout(function () {
-                resumeRecognition();
-                send({ type: "speaking_done" });
-            }, 600);
-        };
-    }
-
-    // ── status UI ─────────────────────────────────────────────────────────────
-    function setStatus(state, text) {
-        dot.className = "dot " + state;
-        statusText.textContent = text;
-    }
-
-    // ── silence timers ────────────────────────────────────────────────────────
-    function resetSilenceTimer() {
-        clearTimeout(silenceTimer);
-        silenceTimer = setTimeout(onSilenceTimeout, currentSilenceMs);
-    }
-
-    function onSilenceTimeout() {
-        if (isMuted) return;
-        accumulated = "";
-        interimEl.textContent = "";
-        currentSilenceMs = SILENCE_MS;   // reset back to 15s
-        send({ type: "timeout" });
+// Fired when 10 s pass with NO speech at all
+function onNoSpeechTimeout() {
+    if (MODE !== "WAITING") return;
+    accumulated = ""; showLive("");
+    if (repeatCount < 1) {
+        repeatCount++;
+        MODE = "PROCESSING";
+        setStatus("processing", "Repeating question…");
+        sendEvent({ type: "repeat" });
+    } else {
+        repeatCount = 0;
+        MODE = "PROCESSING";
         setStatus("processing", "Moving on…");
+        sendEvent({ type: "timeout" });
     }
+}
 
-    // ── transcript processing ─────────────────────────────────────────────────
-    function processTranscript() {
-        const text = accumulated.trim();
-        accumulated = "";
-        interimEl.textContent = "";
-        if (!text) return;
+// ── TTS playback ──────────────────────────────────────────────────────────────
+function playAudio(b64, text) {
+    MODE = "SPEAKING";
+    muteRecognition();
+    stopCountdown();
+    clearTimeout(speechEndTmr);
+    showLive(""); showAlex(text);
+    setStatus("speaking", "Alex is speaking…");
 
-        clearTimeout(silenceTimer);
+    setTimeout(function() {
+        currentAudio = new Audio("data:audio/mp3;base64," + b64);
+        function onDone() {
+            currentAudio = null;
+            showAlex("");
+            setTimeout(enterWaiting, 1500);
+        }
+        currentAudio.onerror = onDone;
+        currentAudio.onended = onDone;
+        currentAudio.play().catch(onDone);
+    }, 300);
+}
 
-        const t = text.toLowerCase();
+// ── enter WAITING phase (after Alex finishes speaking) ────────────────────────
+function enterWaiting() {
+    MODE        = "WAITING";
+    accumulated = "";
+    // Do NOT reset repeatCount here — it must survive across the repeat playback
+    // so we know we already repeated once and should move on next timeout.
+    showLive("");
+    setStatus("listening", "Your turn — speak now…");
+    startMic();
+    startWaitingCountdown();   // 10 s countdown starts HERE, not before
+}
 
-        if (REPEAT_PHRASES.some(function(p) { return t.includes(p); })) {
-            send({ type: "repeat", text: text });
-            setStatus("processing", "Repeating question…");
-            return;
+// ── submit transcript after silence ──────────────────────────────────────────
+function onSpeechEnd() {
+    if (MODE !== "RESPONDING") return;
+    var text = accumulated.trim();
+    accumulated = ""; showLive("");
+    if (!text) {
+        // Nothing recognised — restart the waiting phase (keep repeatCount intact)
+        enterWaiting();
+        return;
+    }
+    // Successful answer — reset repeat counter for the next question
+    repeatCount = 0;
+    MODE = "PROCESSING";
+    stopCountdown();
+    muteRecognition();
+    setStatus("processing", "Processing…");
+    sendEvent({ type: "transcript", text: text });
+}
+
+// ── speech recognition ────────────────────────────────────────────────────────
+function startMic() {
+    try { recognition.start(); } catch(e) {}
+}
+
+function muteRecognition() {
+    clearTimeout(speechEndTmr);
+    try { recognition.abort(); } catch(e) {}
+}
+
+function initRecognition() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+        setStatus("error", "Browser unsupported");
+        errorEl.style.display = "block";
+        errorEl.textContent   = "Speech recognition requires Chrome or Edge.";
+        return;
+    }
+    recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = "en-US";
+
+    recognition.onresult = function(event) {
+        // Ignore everything while Alex speaks or while transcript is being processed
+        if (MODE === "SPEAKING" || MODE === "PROCESSING") return;
+
+        var finalChunk = "", interim = "";
+        for (var i = event.resultIndex; i < event.results.length; i++) {
+            if (event.results[i].isFinal) finalChunk += event.results[i][0].transcript;
+            else                          interim    += event.results[i][0].transcript;
         }
 
-        if (PAUSE_PHRASES.some(function(p) { return t.includes(p); })) {
-            currentSilenceMs = PAUSE_EXTENDED_MS;
-            resetSilenceTimer();
-            send({ type: "pause", text: text });
-            setStatus("paused", "Take your time…");
-            return;
+        showLive(interim || (accumulated + " " + finalChunk).trim());
+
+        if ((interim || finalChunk) && MODE === "WAITING") {
+            // ── First speech detected ──────────────────────────────────────
+            // Kill the no-speech countdown — it's no longer relevant.
+            // From now on only the speech-end timer controls submission.
+            MODE = "RESPONDING";
+            stopCountdown();
+            setStatus("listening", "Listening… (keep going)");
         }
 
-        send({ type: "transcript", text: text });
-        setStatus("processing", "Processing…");
-    }
-
-    // ── speech recognition ────────────────────────────────────────────────────
-    function initRecognition() {
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SR) {
-            notSupEl.style.display = "block";
-            notSupEl.textContent = "⚠ Speech recognition not supported. Please use Chrome or Edge.";
-            setStatus("error", "Unsupported browser");
-            return;
+        if (finalChunk && MODE === "RESPONDING") {
+            accumulated += " " + finalChunk;
+            // Reset the speech-end timer on every new word
+            clearTimeout(speechEndTmr);
+            speechEndTmr = setTimeout(onSpeechEnd, SPEECH_END_MS);
         }
+    };
 
-        recognition = new SR();
-        recognition.continuous     = true;
-        recognition.interimResults = true;
-        recognition.lang           = "en-US";
+    recognition.onerror = function(ev) {
+        if (ev.error === "no-speech" || ev.error === "aborted") return;
+        if (ev.error === "not-allowed") {
+            setStatus("error", "Mic blocked");
+            errorEl.style.display = "block";
+            errorEl.textContent   = "Microphone access denied — allow it in Chrome settings.";
+        }
+    };
 
-        recognition.onstart = function () {
-            isListening = true;
-            setStatus("listening", "Listening…");
-            resetSilenceTimer();
-        };
+    recognition.onend = function() {
+        // Auto-restart unless we deliberately muted (SPEAKING / PROCESSING)
+        if (MODE === "WAITING" || MODE === "RESPONDING") {
+            setTimeout(startMic, 200);
+        }
+    };
+}
 
-        recognition.onresult = function (event) {
-            let finalChunk = "";
-            let interim    = "";
+// ── stop everything (server disconnect / page close) ──────────────────────────
+function stopEverything() {
+    MODE = "SPEAKING"; // mute — prevents mic from restarting
+    clearTimeout(speechEndTmr);
+    stopCountdown();
+    if (currentAudio) { currentAudio.pause(); currentAudio.src = ""; currentAudio = null; }
+    try { recognition.abort(); } catch(e) {}
+    showAlex(""); showLive("");
+}
 
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                if (event.results[i].isFinal) {
-                    finalChunk += event.results[i][0].transcript;
-                } else {
-                    interim += event.results[i][0].transcript;
-                }
-            }
+// Stop audio and mic when the tab is closed or Streamlit kills the page
+window.addEventListener("beforeunload", function() {
+    stopEverything();
+    if (ws) { ws.onclose = null; ws.close(); }
+});
 
-            interimEl.textContent = interim;
-
-            if (finalChunk) {
-                accumulated += " " + finalChunk;
-                resetSilenceTimer();                      // speech → reset 15s timer
-                clearTimeout(speechEndTimer);
-                speechEndTimer = setTimeout(processTranscript, SPEECH_END_MS);
-            }
-        };
-
-        recognition.onerror = function (ev) {
-            // no-speech and aborted are expected — not real errors
-            if (ev.error === "no-speech" || ev.error === "aborted") return;
-            console.error("SpeechRecognition error:", ev.error);
-        };
-
-        recognition.onend = function () {
-            isListening = false;
-            // auto-restart unless we deliberately muted it
-            if (!isMuted) {
-                setTimeout(function () {
-                    try { recognition.start(); } catch (e) {}
-                }, 250);
-            }
-        };
-
-        recognition.start();
+// Also stop when the tab becomes hidden (user switches away)
+document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+        if (currentAudio) { currentAudio.pause(); }
+        try { recognition.abort(); } catch(e) {}
     }
+});
 
-    function muteRecognition() {
-        isMuted     = true;
-        isListening = false;
-        clearTimeout(silenceTimer);
-        clearTimeout(speechEndTimer);
-        try { recognition.abort(); } catch (e) {}
-    }
-
-    function resumeRecognition() {
-        isMuted      = false;
-        accumulated  = "";
-        interimEl.textContent = "";
-        setStatus("listening", "Listening…");
-        try { recognition.start(); } catch (e) {}
-        resetSilenceTimer();
-    }
-
-    // ── boot ──────────────────────────────────────────────────────────────────
-    initRecognition();
+// ── boot ──────────────────────────────────────────────────────────────────────
+initRecognition();
+connectWs();
+// Recognition starts and countdown begins only after Alex's first TTS (enterWaiting)
 </script>
 </body>
 </html>
