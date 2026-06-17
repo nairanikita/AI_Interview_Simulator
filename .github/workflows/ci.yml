@@ -25,15 +25,18 @@ jobs:
 
       - name: Check imports are valid
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           python -c "import streamlit"
           python -c "import langchain"
           python -c "import chromadb"
           python -c "import pdfplumber"
-          python -c "from langchain_google_genai import ChatGoogleGenerativeAI"
+          python -c "import websockets"
+          python -c "from langchain_openai import ChatOpenAI"
           python -c "from langchain_community.vectorstores import Chroma"
           python -c "from document_processor import extract_text_from_pdf, chunk_text, extract_skills"
           python -c "from vector_store import build_vector_store"
-          python -c "from scorer import generate_score_report"
+          python -c "from scorer import generate_score_report, generate_answer_guide"
           python -c "from interviewer_agent import InterviewerAgent"
+          python -c "from voice_pipeline import text_to_speech"
+          python -c "from gtts import gTTS"

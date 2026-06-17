@@ -127,9 +127,9 @@
 #         print("=" * 50)
 
 # interviewer_agent.py
-from langchain_google_genai import ChatGoogleGenerativeAI
+import time
+
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
 
@@ -164,8 +164,8 @@ YOUR RULES — follow these strictly:
 class InterviewerAgent:
     
 
-    def __init__(self, llm, vectorstore,candidate_name:str,role: str,
-                 resume_summary: str, job_description: str):
+    def __init__(self, llm, vectorstore, candidate_name: str, role: str,
+                 resume_summary: str, job_description: str, on_retry=None):
 
         self.llm = llm
         self.vectorstore = vectorstore
@@ -173,11 +173,27 @@ class InterviewerAgent:
         self.role = role
         self.resume_summary = resume_summary
         self.job_description = job_description
+        self.on_retry = on_retry   # called with (seconds) before each quota-retry wait
 
-        
         self.chat_history = []
-
         self.output_parser = StrOutputParser()
+
+    def _invoke_with_retry(self, messages: list) -> str:
+        """Call the LLM and retry on 429 quota errors with backoff."""
+        for attempt in range(3):
+            try:
+                response = self.llm.invoke(messages)
+                return self.output_parser.invoke(response)
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    wait = 15 * (attempt + 1)
+                    if self.on_retry:
+                        self.on_retry(wait)
+                    else:
+                        time.sleep(wait)
+                else:
+                    raise
+        raise RuntimeError("Gemini quota exceeded. Please wait a minute and try again.")
 
     def _get_context(self, query: str) -> str:
        
@@ -210,10 +226,8 @@ class InterviewerAgent:
             ))
         ]
 
-        response = self.llm.invoke(messages)
-        reply = self.output_parser.invoke(response)
+        reply = self._invoke_with_retry(messages)
 
-        
         self.chat_history.append(
             HumanMessage(content="[Interview started]")
         )
@@ -232,8 +246,7 @@ class InterviewerAgent:
         messages.extend(self.chat_history)
         messages.append(HumanMessage(content=candidate_answer))
 
-        response = self.llm.invoke(messages)
-        reply = self.output_parser.invoke(response)
+        reply = self._invoke_with_retry(messages)
 
         # save this exchange to history for next turn
         self.chat_history.append(HumanMessage(content=candidate_answer))

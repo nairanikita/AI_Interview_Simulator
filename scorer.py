@@ -1,5 +1,4 @@
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import AIMessage,HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -136,4 +135,82 @@ def parse_score_report(raw_text:str)->dict:
 
     return report
 
+
+def extract_qa_pairs(chat_history: list) -> list[dict]:
+    """Return list of {question, answer} dicts from the chat history."""
+    pairs = []
+    last_question = None
+    for msg in chat_history:
+        if isinstance(msg, AIMessage):
+            last_question = msg.content.strip()
+        elif isinstance(msg, HumanMessage):
+            if msg.content == "[Interview started]":
+                continue
+            if last_question:
+                pairs.append({"question": last_question, "answer": msg.content.strip()})
+                last_question = None
+    return pairs
+
+
+def generate_answer_guide(chat_history: list, role: str, llm) -> list[dict]:
+    """
+    For each Q&A exchange, ask the LLM for an ideal answer and the key points
+    the candidate missed. Returns a list of dicts with keys:
+      question, candidate_answer, ideal_answer, missed_points
+    """
+    pairs = extract_qa_pairs(chat_history)
+    if not pairs:
+        return []
+
+    results = []
+    for pair in pairs:
+        prompt = f"""You are a career coach reviewing a mock interview for the role of {role}.
+
+INTERVIEWER QUESTION:
+{pair['question']}
+
+CANDIDATE'S ACTUAL ANSWER:
+{pair['answer']}
+
+Respond in EXACTLY this format with no extra text:
+
+IDEAL_ANSWER: [2-4 sentences showing what a strong answer would sound like, using specific technical terms relevant to the role]
+MISSED_POINTS:
+- [key point or keyword they should have mentioned]
+- [key point or keyword they should have mentioned]
+- [key point or keyword they should have mentioned]
+WHAT_THEY_DID_WELL: [one sentence, or "N/A" if nothing stood out]"""
+
+        response = llm.invoke([HumanMessage(content=prompt)])
+        raw = response.content.strip()
+
+        ideal = ""
+        missed = []
+        did_well = ""
+        section = None
+
+        for line in raw.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith("IDEAL_ANSWER:"):
+                ideal = line.split(":", 1)[1].strip()
+                section = None
+            elif line.startswith("MISSED_POINTS:"):
+                section = "missed"
+            elif line.startswith("WHAT_THEY_DID_WELL:"):
+                did_well = line.split(":", 1)[1].strip()
+                section = None
+            elif line.startswith("- ") and section == "missed":
+                missed.append(line[2:])
+
+        results.append({
+            "question": pair["question"],
+            "candidate_answer": pair["answer"],
+            "ideal_answer": ideal,
+            "missed_points": missed,
+            "did_well": did_well,
+        })
+
+    return results
 
