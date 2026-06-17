@@ -1,0 +1,12 @@
+.env
+.DS_Store
+__pycache__/
+*.pyc
+virenv/
+chroma_db/
+testfiles/
+tests/
+docs/
+*.md
+.git/
+.github/
