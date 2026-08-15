@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from openai import AuthenticationError
 
 from document_processor import extract_text_from_pdf, chunk_text, extract_skills
 from interviewer_agent import InterviewerAgent
@@ -122,8 +123,25 @@ for key, val in _defaults.items():
         st.session_state[key] = val
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
+def _resolve_api_key() -> str:
+    """Session-entered key takes priority; falls back to .env for local dev.
+    Never written to disk or logged — lives only in this session's memory."""
+    user_key = st.session_state.get("openai_api_key", "").strip()
+    return user_key or os.getenv("OPENAI_API_KEY", "")
+
+
 with st.sidebar:
     st.title("Interview Setup")
+
+    st.text_input(
+        "OpenAI API Key",
+        type="password",
+        key="openai_api_key",
+        placeholder="sk-...",
+        help="Used only for this browser session to call OpenAI — never written "
+             "to disk or logged. Leave blank to use a locally configured key."
+    )
+
     st.divider()
 
     resume_file = st.file_uploader(
@@ -171,48 +189,56 @@ def show_retry_countdown(wait_seconds: int):
 
 # ── start interview ───────────────────────────────────────────────────────────
 if start_button:
-    if not resume_file:
+    api_key = _resolve_api_key()
+    if not api_key:
+        st.sidebar.error("Please enter your OpenAI API key.")
+    elif not resume_file:
         st.sidebar.error("Please upload your resume PDF.")
     elif not job_description:
         st.sidebar.error("Please paste a job description.")
     elif not role:
         st.sidebar.error("Please enter the role you are applying for.")
     else:
-        with st.spinner("Reading your resume and setting up the interview..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(resume_file.read())
-                tmp_path = tmp.name
+        try:
+            with st.spinner("Reading your resume and setting up the interview..."):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(resume_file.read())
+                    tmp_path = tmp.name
 
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
-            raw_text = extract_text_from_pdf(tmp_path)
-            chunks   = chunk_text(raw_text)
-            resume_summary, candidate_name = extract_skills(
-                raw_text, llm, on_retry=show_retry_countdown
-            )
-            vectorstore = build_vector_store(chunks)
-            os.unlink(tmp_path)
+                llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=api_key)
+                raw_text = extract_text_from_pdf(tmp_path)
+                chunks   = chunk_text(raw_text)
+                resume_summary, candidate_name = extract_skills(
+                    raw_text, llm, on_retry=show_retry_countdown
+                )
+                vectorstore = build_vector_store(chunks, api_key=api_key)
+                os.unlink(tmp_path)
 
-            agent = InterviewerAgent(
-                llm=llm,
-                vectorstore=vectorstore,
-                candidate_name=candidate_name,
-                role=role,
-                resume_summary=resume_summary,
-                job_description=job_description,
-                on_retry=show_retry_countdown,
-            )
-            first_question = agent.start_interview()
+                agent = InterviewerAgent(
+                    llm=llm,
+                    vectorstore=vectorstore,
+                    candidate_name=candidate_name,
+                    role=role,
+                    resume_summary=resume_summary,
+                    job_description=job_description,
+                    on_retry=show_retry_countdown,
+                )
+                first_question = agent.start_interview()
 
-            st.session_state.agent            = agent
-            st.session_state.interview_active = True
-            st.session_state.question_count   = 1
-            st.session_state.last_question    = first_question
-            st.session_state.messages.append({"role": "assistant", "content": first_question})
+                st.session_state.agent            = agent
+                st.session_state.interview_active = True
+                st.session_state.question_count   = 1
+                st.session_state.last_question    = first_question
+                st.session_state.messages.append({"role": "assistant", "content": first_question})
 
             if voice_mode:
                 _queue_tts(first_question)
 
             st.rerun()
+        except AuthenticationError:
+            st.sidebar.error("That OpenAI API key was rejected. Please check it and try again.")
+        except Exception as e:
+            st.sidebar.error(f"Could not start the interview: {e}")
 
 # ── main area ─────────────────────────────────────────────────────────────────
 st.title("AI Interview Simulator")
@@ -241,7 +267,7 @@ else:
 
         if st.session_state.score_report is None:
             chat_history = st.session_state.agent.get_history()
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1, api_key=_resolve_api_key())
             with st.spinner("Generating your score report…"):
                 st.session_state.score_report = generate_score_report(chat_history, role, llm)
             with st.spinner("Building your answer guide…"):
