@@ -8,8 +8,8 @@ from document_processor import extract_text_from_pdf, chunk_text
 load_dotenv()
 
 
-def build_vector_store(chunks: list, source: str = "resume") -> Chroma:
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+def build_vector_store(chunks: list, source: str = "resume", api_key: str = None) -> Chroma:
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
     docs = [
         Document(
             page_content=chunk,
